@@ -3,11 +3,17 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import random
+import multiprocessing
 from sklearn.metrics import confusion_matrix
 
-model = tf.keras.models.load_model("models/multivar_lstm_model")
-data = np.load("data/model_data/multivar_lstm.npz", allow_pickle=True)
-norms = np.load("data/model_data/multivar_lstm_norms.npz")
+cores = multiprocessing.cpu_count() 
+tf.config.threading.set_inter_op_parallelism_threads(cores-1)
+
+# model = tf.keras.models.load_model("models/multivar_lstm_model")
+# data = np.load("data/model_data/multivar_lstm.npz", allow_pickle=True)
+model = tf.keras.models.load_model("models/base_lstm_mult_model")
+data = np.load("data/model_data/base_lstm_mult.npz", allow_pickle=True)
+# norms = np.load("data/model_data/multivar_lstm_norms.npz")
 
 asset_details = pd.read_csv("data/asset_details.csv")
 assets = [str(i) for i in asset_details["Asset_ID"]]
@@ -44,16 +50,8 @@ test_y_actual = (test_y* sds) + means
 get_3d_means(preds_actual)
 get_3d_means(test_y_actual)
 
-
-rand = random.randint(0, preds.shape[0])
-print(rand)
-plt.plot(preds_actual[rand, :, 2], label = "preds")
-plt.plot(test_y_actual[rand, :, 2], label = "actual")
-plt.legend()
-plt.show()
-
 # Charting
-def plot_pred(preds, x, y, asset_index, seed):
+def plot_pred_3d(preds, x, y, asset_index, seed):
     random.seed(seed)
     rand = random.randint(0, preds.shape[0])
     print("seed is " + str(rand))
@@ -73,6 +71,30 @@ def plot_pred(preds, x, y, asset_index, seed):
     plt.plot(preds_plt, label = "preds")
     plt.legend()
     plt.show()
+
+def plot_pred_2d(preds, x, y, seed):
+    random.seed(seed)
+    rand = random.randint(0, preds.shape[0])
+    print("seed is " + str(rand))
+    
+    preds_compare = preds[rand, :].reshape(-1, 1)
+    x_compare = x[rand, :].reshape(-1, 1)
+    y_compare = y[rand, :].reshape(-1, 1)
+    
+    actuals_plt = np.concatenate([x_compare, 
+                                  y_compare])
+    
+    empty = np.empty((x_compare.shape[0], x_compare.shape[1]))
+    empty[:] = np.nan
+    preds_plt = np.concatenate([empty, preds_compare])
+    
+    plt.plot(actuals_plt, label = "actuals")
+    plt.plot(preds_plt, label = "preds")
+    plt.legend()
+    plt.show()
+
+for i in range(10, 20):
+    plot_pred_2d(preds, test_x[:, :, 2], test_y, i)
 
 # Somethings not working here, as a lot of the data doesn't make sense
 # I think this is timestamps being wrong. Need some way to link price back 

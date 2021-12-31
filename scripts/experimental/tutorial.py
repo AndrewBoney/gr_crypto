@@ -20,7 +20,7 @@ import random
 cores = multiprocessing.cpu_count() 
 tf.config.threading.set_inter_op_parallelism_threads(cores-1)
 
-root_folder = os.getcwd() + "\data"
+root_folder = "data"
 
 wide_close = pd.read_csv(root_folder + "/working/wide_close.csv")
 wide_target = pd.read_csv(root_folder + "/working/wide_target.csv")
@@ -47,16 +47,20 @@ def simple_lstm(x_steps, y_steps, n_features):
     ])
     return model
 
-
-
+def simple_lstm_mult(x_steps, y_steps, n_features):
+    model = Sequential([
+        LSTM(10, activation = "relu", input_shape = (x_steps, n_features)), 
+        Dense(y_steps)
+    ])
+    return model
 
 # Encoder / Decoder LSTM model
 def end_dec_lstm(x_steps, y_steps, n_features):
     model = Sequential([
-        LSTM(200, activation = "relu", input_shape = (x_steps, n_features)), 
+        LSTM(200, activation = "relu", input_shape = (x_steps, n_features_x)), 
         RepeatVector(y_steps),
         LSTM(100, activation = "relu", return_sequences = True), 
-        TimeDistributed(Dense(n_features))    
+        TimeDistributed(Dense(n_features_y))    
     ])
     return model
 
@@ -66,17 +70,19 @@ def base_compiler(model):
                     optimizer=tf.optimizers.Adam(learning_rate = 0.0005),
                     metrics=[tf.metrics.MeanAbsoluteError()])
 
-
-
 wide_close[assets] = wide_close[assets].replace([np.inf, -np.inf], np.nan)
 
-def full_model(data_in, col, x_steps, y_steps, fun, compiler,
+def full_model(data_in, col_in, col_out, x_steps, y_steps, fun, compiler,
                save_loc, save = True, epochs = 50, patience = 2):
     
-    n_features = len(col)
-    # TODO: Find a way to keep track of timestamps
+    n_features_x = len(col_in)
+    n_features_y = len(col_out)
     
-    # TODO: is there a faster way to do this?
+    # TODO: CHeck length of sequences are equal
+    x_sequences = np.array(data_in[col_in]).reshape(-1, n_features_x)
+    y_sequences = np.array(data_in[col_out]).reshape(-1, n_features_y)
+    
+    """
     def split_sequences(sequences, n_steps_in, n_steps_out):
     	X, y = list(), list()
     	for i in range(len(sequences)):
@@ -91,9 +97,46 @@ def full_model(data_in, col, x_steps, y_steps, fun, compiler,
     		X.append(seq_x)
     		y.append(seq_y)
     	return np.array(X), np.array(y)
+    """  
+    
+    # set index measures. 
+    if isinstance(x_steps, int):
+        ix_in = list(range(x_steps))
+    elif isinstance(x_steps, list):
+        ix_in = x_steps
+    else:
+        raise TypeError("x_steps should be either an int or list")
+        
+    if isinstance(y_steps, int):
+        ix_out = range(y_steps) + 1
+    elif isinstance(y_steps, list):
+        ix_out = y_steps
+    else:
+        raise TypeError("y_steps should be either an int or list")        
+
+    def split_sequences_d1(x_sequences, y_sequences, 
+                           ix_in, ix_out):
+    
+        X, y = list(), list()
+        for i in range(max(ix_in), len(x_sequences) - max(ix_out)):
+    		# find the end of this pattern
+            end_ix = [i - x for x in ix_in]
+            out_end_ix = [i + x for x in ix_out]
+            
+    		# check if we are beyond the dataset
+            # if out_end_ix > len(x_sequences):
+            # break
+        
+    		# gather input and output parts of the pattern
+            seq_x, seq_y = x_sequences[end_ix, :], y_sequences[out_end_ix, :]
+            X.append(seq_x)
+            y.append(seq_y)
+        return np.array(X), np.array(y)
     
     t0 = time()
-    all_x, all_y = split_sequences(np.array(data_in[col]), x_steps, y_steps)
+    # all_x, all_y = split_sequences(np.array(data_in[col]), x_steps, y_steps)
+    # all_x, all_y = split_sequences_d1(x_sequences, y_sequences, x_steps, y_steps)
+    all_x, all_y = split_sequences_d1(x_sequences, y_sequences, ix_in, ix_out)
     t1 = time()
     print("split_sequences took " + str(round(t1 - t0)) + " seconds")
     
@@ -110,17 +153,17 @@ def full_model(data_in, col, x_steps, y_steps, fun, compiler,
         return x[both, :, :], y[both, :, :], both # also return indexes
     
     t0 = time()
-    filt_x, filt_y, both = remove_nas_3d(all_x.reshape(all_x.shape[0], all_x.shape[1], n_features), 
-                                   all_y.reshape(all_y.shape[0], all_y.shape[1], n_features))
+    filt_x, filt_y, both = \
+        remove_nas_3d(all_x.reshape(all_x.shape[0], all_x.shape[1], n_features_x), 
+                      all_y.reshape(all_y.shape[0], all_y.shape[1], n_features_y))
     t1 = time()
     print("remove_nas_3d took " + str(round(t1 - t0)) + " seconds")
     
     # Saving timestamps
-    time_filt = np.array(data_in["time"][(x_steps-1):(len(data_in)-y_steps)][both])
+    time_filt = np.array(data_in["time"][max(ix_in):(len(data_in)-max(ix_out))][both])
     
     # Train / Test Splits
     # TODO: Spit into folds for CV
-    # TODO: Normalise again here
     n = len(filt_y)
     train_x = filt_x[0:int(n*0.8),:,:]
     train_y = filt_y[0:int(n*0.8),:,:]
@@ -135,21 +178,23 @@ def full_model(data_in, col, x_steps, y_steps, fun, compiler,
     
     # Create model, from predefined fun. Allows for flexibility 
     # (although might make saving hard)
-    del([all_x, all_y, filt_x, filt_y])    
+    del([all_x, all_y, filt_x, filt_y, x_sequences, y_sequences])    
     
     # Get Model, specified in fun
-    model = fun(x_steps, y_steps, n_features)    
-    
-    # Compile model with compiler
-    compiler(model)
+    x_len = len(ix_in)
+    y_len = len(ix_out)
+    model = fun(x_len, y_len, n_features_x)    
     
     early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss',
                                                     patience=patience,
                                                     mode='min')
     
+    # Compile model with compiler
+    compiler(model)
+    
     model.summary()
     
-    history = model.fit(train_x, train_y, epochs = epochs, 
+    history = model.fit(train_x, train_y, epochs = epochs, batch_size = 32,
                         validation_split = 0.1, callbacks = [early_stopping])
 
     def plot_loss(history):
@@ -170,12 +215,26 @@ def full_model(data_in, col, x_steps, y_steps, fun, compiler,
     return model, history
 
 base_lstm_model, base_lstm_history = \
-    full_model(wide_close, "1", 60, 15, 1, simple_lstm, base_compiler)
+    full_model(wide_close, "1", "1", 60, 15, 1, simple_lstm, base_compiler)
 
+base_lstm_mult_model, base_lstm_mult_history = \
+    full_model(data_in = wide_close, col_in = assets, col_out = "1", 
+               x_steps = 60, y_steps = 15, fun = simple_lstm_mult, 
+               compiler = base_compiler, 
+               save_loc = "data/model_data/base_lstm_mult.npz")
+    
 # !mkdir "models"
 # !mkdir "models\base_lstm_model"
-
+# mkdir "models\base_lstm_mult_model"
 base_lstm_model.save("models/base_lstm_model")
+base_lstm_mult_model.save("models/base_lstm_mult_model")
+
+# 2 step
+step_base_lstm_model, step_base_lstm_history = \
+    full_model(data_in = wide_close, col_in = "1", col_out = "1", 
+           x_steps = 60, y_steps = [1, 16], fun = simple_lstm, 
+           compiler = base_compiler, 
+           save_loc = "data/model_data/2step_lstm.npz")
 
 means  = wide_close[assets].mean()
 sds = wide_close[assets].std()
