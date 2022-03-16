@@ -35,8 +35,6 @@ assets = list(asset_details["Asset_Name"])
 high_rel = pd.DataFrame(columns=assets, index=range(len(wide_low)))
 low_rel = pd.DataFrame(columns=assets, index=range(len(wide_low)))
 
-[s + mystring for s in mylist]
-
 for a in assets:    
     low_rel[a + "_low"] = wide_low[a] / wide_vwap[a]
     high_rel[a + "_high"] = wide_high[a] / wide_vwap[a]

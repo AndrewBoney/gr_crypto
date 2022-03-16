@@ -47,15 +47,18 @@ def simple_lstm(x_steps, y_steps, n_features):
     ])
     return model
 
-def simple_lstm_mult(x_steps, y_steps, n_features):
+## Med LSTM
+def med_lstm(x_steps, y_steps, n_features_x):
     model = Sequential([
-        LSTM(10, activation = "relu", input_shape = (x_steps, n_features)), 
+        LSTM(50, activation = "relu", return_sequences = True,
+             input_shape = (x_steps, n_features), dropout = 0.4),
+        LSTM(20, activation = "relu"),
         Dense(y_steps)
     ])
     return model
 
 # Encoder / Decoder LSTM model
-def end_dec_lstm(x_steps, y_steps, n_features):
+def end_dec_lstm(x_steps, y_steps, n_features_x, n_features_y):
     model = Sequential([
         LSTM(200, activation = "relu", input_shape = (x_steps, n_features_x)), 
         RepeatVector(y_steps),
@@ -70,6 +73,13 @@ def base_compiler(model):
                     optimizer=tf.optimizers.Adam(learning_rate = 0.0005),
                     metrics=[tf.metrics.MeanAbsoluteError()])
 
+def cosine_compiler(model):
+    return model.compile(loss=tf.keras.losses.CosineSimilarity(axis=1),
+                    optimizer=tf.optimizers.Adam(learning_rate = 0.0005),
+                    metrics=[tf.metrics.MeanAbsoluteError()])
+
+    
+
 wide_close[assets] = wide_close[assets].replace([np.inf, -np.inf], np.nan)
 
 def full_model(data_in, col_in, col_out, x_steps, y_steps, fun, compiler,
@@ -82,23 +92,6 @@ def full_model(data_in, col_in, col_out, x_steps, y_steps, fun, compiler,
     x_sequences = np.array(data_in[col_in]).reshape(-1, n_features_x)
     y_sequences = np.array(data_in[col_out]).reshape(-1, n_features_y)
     
-    """
-    def split_sequences(sequences, n_steps_in, n_steps_out):
-    	X, y = list(), list()
-    	for i in range(len(sequences)):
-    		# find the end of this pattern
-    		end_ix = i + n_steps_in
-    		out_end_ix = end_ix + n_steps_out
-    		# check if we are beyond the dataset
-    		if out_end_ix > len(sequences):
-    			break
-    		# gather input and output parts of the pattern
-    		seq_x, seq_y = sequences[i:end_ix, :], sequences[end_ix:out_end_ix, :]
-    		X.append(seq_x)
-    		y.append(seq_y)
-    	return np.array(X), np.array(y)
-    """  
-    
     # set index measures. 
     if isinstance(x_steps, int):
         ix_in = list(range(x_steps))
@@ -108,35 +101,25 @@ def full_model(data_in, col_in, col_out, x_steps, y_steps, fun, compiler,
         raise TypeError("x_steps should be either an int or list")
         
     if isinstance(y_steps, int):
-        ix_out = range(y_steps) + 1
+        ix_out = list(range(1, y_steps + 1))
     elif isinstance(y_steps, list):
         ix_out = y_steps
     else:
         raise TypeError("y_steps should be either an int or list")        
 
-    def split_sequences_d1(x_sequences, y_sequences, 
-                           ix_in, ix_out):
-    
+    def split_sequences(x_sequences, y_sequences, ix_in, ix_out):
         X, y = list(), list()
         for i in range(max(ix_in), len(x_sequences) - max(ix_out)):
-    		# find the end of this pattern
             end_ix = [i - x for x in ix_in]
             out_end_ix = [i + x for x in ix_out]
             
-    		# check if we are beyond the dataset
-            # if out_end_ix > len(x_sequences):
-            # break
-        
-    		# gather input and output parts of the pattern
             seq_x, seq_y = x_sequences[end_ix, :], y_sequences[out_end_ix, :]
             X.append(seq_x)
             y.append(seq_y)
         return np.array(X), np.array(y)
     
     t0 = time()
-    # all_x, all_y = split_sequences(np.array(data_in[col]), x_steps, y_steps)
-    # all_x, all_y = split_sequences_d1(x_sequences, y_sequences, x_steps, y_steps)
-    all_x, all_y = split_sequences_d1(x_sequences, y_sequences, ix_in, ix_out)
+    all_x, all_y = split_sequences(x_sequences, y_sequences, ix_in, ix_out)
     t1 = time()
     print("split_sequences took " + str(round(t1 - t0)) + " seconds")
     
@@ -234,8 +217,39 @@ step_base_lstm_model, step_base_lstm_history = \
     full_model(data_in = wide_close, col_in = "1", col_out = "1", 
            x_steps = 60, y_steps = [1, 16], fun = simple_lstm, 
            compiler = base_compiler, 
-           save_loc = "data/model_data/2step_lstm.npz")
+           save_loc = "data/model_data/step_lstm.npz")
 
+!mkdir "models/step_lstm"
+step_base_lstm_model.save("models/step_lstm")
+
+# Return Based
+def log_return(series, periods=1):
+    return np.log(series).diff(periods=periods)
+
+close_returns = wide_close[assets].apply(log_return)
+close_returns["time"] = wide_close["time"]
+close_returns[assets] = close_returns[assets].replace([np.inf,-np.inf],np.nan)
+
+import seaborn as sns
+long = close_returns[assets].melt().dropna()
+sns.violinplot(x = "variable", y = "value", data = long)
+
+simple_return_model, simple_return_history = \
+    full_model(data_in = close_returns, col_in = "1", col_out = "1", 
+           x_steps = 60, y_steps = 16, fun = simple_lstm, 
+           compiler = base_compiler, 
+           save_loc = "data/model_data/return_lstm.npz")
+
+!mkdir "models/return_lstm"
+simple_return_model.save("models/return_lstm")
+
+med_return_model, med_return_history = \
+    full_model(data_in = close_returns, col_in = "1", col_out = "1", 
+           x_steps = 60, y_steps = [1, 16], fun = med_lstm, 
+           compiler = base_compiler, 
+           save_loc = "data/model_data/med_return_lstm.npz")
+
+# Normalised all vars
 means  = wide_close[assets].mean()
 sds = wide_close[assets].std()
 
@@ -264,5 +278,6 @@ explain = pd.DataFrame({"model": ["base_lstm_model", "multivar_lstm_model"],
                                         "2 LSTM layers with 200/100 neurons, and encoder / decoder layer"]})
 
 
+# Plot
 
 
